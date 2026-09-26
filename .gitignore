@@ -1,0 +1,17 @@
+# Virtual environment (each computer makes its own)
+.venv/
+.venv-1/
+
+# The dataset (get this yourself from Kaggle -- too big/licensed to put on GitHub)
+online_retail_II.xlsx
+
+# Files main.py creates (charts, saved model, CSV cache, exported CSV)
+outputs/
+retail_2010_2011.csv
+
+# Python junk
+__pycache__/
+*.pyc
+
+# Mac junk
+.DS_Store

@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+matplotlib
+openpyxl
+joblib
+streamlit>=1.50
+altair
+mlxtend
+SQLAlchemy
+PyMySQL
+cryptography
