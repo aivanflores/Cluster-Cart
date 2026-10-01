@@ -2,7 +2,10 @@
 ClusterCart dashboard (Streamlit)
 Start MySQL in the XAMPP Control Panel, run main.py once, then:  streamlit run app.py
 """
+import base64
 import hashlib
+import html
+import re
 
 import altair as alt
 import pandas as pd
@@ -13,37 +16,8 @@ import db
 from classification import assign_new_customer
 from cleaning import clean_data, prepare_uploaded_data, read_uploaded_file
 from data_store import add_transactions, reset_to_original
-from rfm import make_invoice_table
 
-st.set_page_config(page_title="ClusterCart", layout="wide")
-
-st.html(
-    """
-    <style>
-    /* Main tabs: nasa right side, itinaas para pumantay sa title */
-    [role="tablist"] {
-        justify-content: flex-end !important;
-        gap: 1.75rem !important;
-        position: relative;
-        top: -4.8rem;
-    }
-    [role="tab"] {
-        font-size: 1.35rem !important;   /* mas malaki nang konti, pero mas maliit sa title */
-        font-weight: 600 !important;
-    }
-
-    /* Ibalik sa normal ang maliliit na tabs sa loob (Recency / Frequency / Monetary) */
-    [role="tabpanel"] [role="tablist"] {
-        justify-content: flex-start !important;
-        gap: 0.5rem !important;
-        top: 0;
-    }
-    [role="tabpanel"] [role="tab"] {
-        font-size: 1rem !important;
-    }
-    </style>
-    """
-)
+st.set_page_config(page_title="ClusterCart", page_icon="🛒", layout="wide")
 
 SAMPLE_FILE = """Invoice,StockCode,Description,Quantity,InvoiceDate,Price,Customer ID,Country
 700001,85123A,SAMPLE ITEM A,6,2011-12-01 10:30:00,2.55,90001,United Kingdom
@@ -51,12 +25,189 @@ SAMPLE_FILE = """Invoice,StockCode,Description,Quantity,InvoiceDate,Price,Custom
 700003,84029E,SAMPLE ITEM C,3,2011-11-02 09:00:00,3.75,90002,United Kingdom
 """
 
+# ---------- Brand: colors, logo, segment icons ----------
+CORAL = "#FF5A4F"
+CORAL_DARK = "#D93A30"
+CORAL_SOFT = "#FFF1EF"
+INK = "#2B2D42"
+MUTED = "#6B6F80"
+
+LOGO_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">'
+    '<rect width="48" height="48" rx="13" fill="#FF5A4F"/>'
+    '<path d="M9 15h5l4 15h15l3-10H17" fill="none" stroke="#fff" stroke-width="3" '
+    'stroke-linecap="round" stroke-linejoin="round"/>'
+    '<circle cx="21" cy="36" r="2.7" fill="#fff"/><circle cx="32" cy="36" r="2.7" fill="#fff"/>'
+    '<circle cx="23" cy="11" r="2.2" fill="#fff"/><circle cx="30" cy="8" r="2.2" fill="#fff"/>'
+    '<circle cx="36" cy="13" r="2.2" fill="#fff"/></svg>'
+)
+LOGO_URI = "data:image/svg+xml;base64," + base64.b64encode(LOGO_SVG.encode()).decode()
+
+# Simple line icons (drawn on a 48x48 grid)
+ICONS = {
+    "users": '<circle cx="24" cy="15" r="6"/><path d="M13 40c0-7 5-12 11-12s11 5 11 12"/>'
+             '<circle cx="9" cy="21" r="4"/><path d="M3 38c0-5 2-8 6-9"/>'
+             '<circle cx="39" cy="21" r="4"/><path d="M45 38c0-5-2-8-6-9"/>',
+    "chart": '<rect x="9" y="29" width="7" height="12"/><rect x="20" y="21" width="7" height="20"/>'
+             '<rect x="31" y="27" width="7" height="14"/><path d="M8 20l10-9 8 6 14-11"/><path d="M33 6h8v8"/>',
+    "cart": '<path d="M5 9h6l5 23h22l4-16H13"/><circle cx="19" cy="39" r="2.8"/><circle cx="35" cy="39" r="2.8"/>',
+    "card": '<rect x="5" y="11" width="38" height="26" rx="4"/><path d="M5 20h38M11 30h10"/>',
+    "star": '<path d="M24 5l5.6 12.4L43 19l-10 9.2L35.6 42 24 35.2 12.4 42 15 28.2 5 19l13.4-1.6z"/>',
+    "shield": '<path d="M24 5l15 5.5V23c0 9.5-6.5 17-15 21-8.5-4-15-11.5-15-21V10.5z"/><path d="M16 24l6 6 11-12"/>',
+    "tag": '<path d="M7 7h17l19 19-17 17L7 24z"/><circle cx="16" cy="16" r="3"/>',
+    "clock": '<circle cx="24" cy="24" r="18"/><path d="M24 12v13l8 5"/>',
+    "user-plus": '<circle cx="19" cy="15" r="7"/><path d="M5 41c0-8 6-13 14-13s14 5 14 13"/><path d="M38 14v12M32 20h12"/>',
+    "refresh": '<path d="M39 20a15 15 0 0 0-27-5"/><path d="M10 7v9h9"/><path d="M9 28a15 15 0 0 0 27 5"/><path d="M38 41v-9h-9"/>',
+    "swap": '<path d="M8 17h32M33 10l7 7-7 7"/><path d="M40 33H8M15 26l-7 7 7 7"/>',
+}
+
+
+# Same font as the rest of the site (set in .streamlit/config.toml) for every chart
+FONT = "Plus Jakarta Sans"
+
+
+@alt.theme.register("clustercart", enable=True)
+def clustercart_theme():
+    return alt.theme.ThemeConfig({"config": {
+        "font": FONT,
+        "axis": {"labelFont": FONT, "titleFont": FONT, "labelColor": MUTED, "titleColor": INK,
+                 "titleFontWeight": 600, "gridColor": "#EEF0F4", "domainColor": "#D9DCE5"},
+        "legend": {"labelFont": FONT, "titleFont": FONT, "labelColor": INK, "titleColor": INK},
+        "title": {"font": FONT, "color": INK},
+        "header": {"labelFont": FONT, "titleFont": FONT},
+    }})
+
+
+def icon_svg(name, size=28):
+    return (f'<svg viewBox="0 0 48 48" width="{size}" height="{size}" fill="none" stroke="{INK}" '
+            f'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+
+
+# Icon and color for each segment type (matched by name, so renamed segments still work).
+# Colors checked for color-blind separation and equal visual weight.
+SEGMENT_STYLE = {
+    "High-Spending": ("star", "#4453C7"),     # indigo
+    "Loyal": ("shield", "#F2554A"),           # coral, ang accent ng site
+    "Regular": ("tag", "#E3A21A"),            # amber
+    "Inactive": ("clock", "#12A08C"),         # teal
+}
+
+
+def seg_style(name):
+    for key, (icon, color) in SEGMENT_STYLE.items():
+        if key.lower() in str(name).lower():
+            return icon, color
+    return "users", "#8D99AE"
+
+
+def seg_icon_svg(name, size=30):
+    return icon_svg(seg_style(name)[0], size)
+
+
+def seg_color(name):
+    return seg_style(name)[1]
+
+
+def seg_scale(segments):
+    names = sorted(set(segments))
+    return alt.Scale(domain=names, range=[seg_color(name) for name in names])
+
+
+def seg_slug(name):
+    return re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")
+
+
+STATIC_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+:root { --nav-up: -2.4rem; --radius: 8px; }          /* raise or lower the nav bar to line up with the title */
+.block-container, [data-testid="stVerticalBlockBorderWrapper"] { border-radius: var(--radius) !important; border-color: #E8EAF0 !important; } { padding-top: 5rem !important; }
+
+/* ---------- Header ---------- */
+.cc-kicker { color: #6B6F80; font-size: 0.95rem; margin-bottom: 0.35rem; }
+.cc-brand { display: flex; align-items: center; gap: 0.8rem; font-size: 2.7rem;
+            font-weight: 800; color: #2B2D42; line-height: 1.1; }
+.cc-brand img { height: 3rem; width: 3rem; }
+.cc-brand b { color: #FF5A4F; }
+
+/* ---------- Nav tabs (right side) ---------- */
+[role="tablist"] { justify-content: flex-end !important; gap: 1.75rem !important;
+                   position: relative; top: var(--nav-up); }
+[role="tab"] { font-size: 1.55rem !important; font-weight: 600 !important; }
+[role="tabpanel"] [role="tablist"] { justify-content: flex-start !important; gap: 0.5rem !important; top: 0 !important; }
+[role="tabpanel"] [role="tab"] { font-size: 1rem !important; }
+
+/* ---------- Buttons ---------- */
+.stButton > button, .stDownloadButton > button { border-radius: var(--radius); font-weight: 600; }
+.stDownloadButton > button { border: 1px solid #FF5A4F; color: #D93A30; }
+.stDownloadButton > button:hover { background: #FFF1EF; border-color: #D93A30; color: #D93A30; }
+
+/* ---------- KPI cards ---------- */
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; }
+.kpi { display: flex; align-items: center; gap: 1rem; background: #FFFFFF; border: 1px solid #E8EAF0;
+       border-radius: var(--radius); padding: 1.1rem 1.3rem; }
+.kpi-icon { width: 3.2rem; height: 3.2rem; border-radius: var(--radius); background: #F4F5F8;
+            display: flex; align-items: center; justify-content: center; }
+.kpi-label { color: #6B6F80; font-size: 0.9rem; }
+.kpi-value { color: #FF5A4F; font-size: 1.8rem; font-weight: 800; line-height: 1.15; }
+
+/* ---------- Segment cards ---------- */
+.seg-head { display: flex; align-items: center; gap: 0.9rem; }
+.seg-icon { width: 3.6rem; height: 3.6rem; border-radius: var(--radius); display: flex;
+            align-items: center; justify-content: center; }
+.seg-name { font-weight: 800; font-size: 1.15rem; color: #2B2D42; }
+.seg-count { font-size: 1.6rem; font-weight: 800; color: #2B2D42; line-height: 1.2; }
+.seg-count small { font-size: 0.85rem; font-weight: 500; color: #6B6F80; }
+.seg-bar { height: 8px; border-radius: 6px; background: #F1E4E2; margin-top: 0.7rem; overflow: hidden; }
+.seg-bar div { height: 100%; border-radius: 6px; }
+.stat-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
+.stat { flex: 1; min-width: 5.5rem; background: #FFFFFF; border: 1px solid #E8EAF0; border-radius: var(--radius);
+        padding: 0.55rem 0.7rem; }
+.stat-label { color: #6B6F80; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.stat-value { color: #2B2D42; font-size: 1.1rem; font-weight: 700; }
+.reco-label, .reco-text { font-family: 'Inter', sans-serif; }
+.reco-label { color: #D93A30; font-weight: 700; font-size: 0.8rem; text-transform: uppercase;
+              letter-spacing: 0.05em; margin-bottom: 0.2rem; }
+.reco-text { color: #2B2D42; font-size: 0.95rem; line-height: 1.45; }
+
+/* ---------- Result card (New Customers) ---------- */
+.result { display: flex; align-items: center; gap: 1rem; border-radius: var(--radius); padding: 1.1rem 1.3rem;
+          background: #FF5A4F; color: #FFFFFF; }
+.result-icon { width: 3.6rem; height: 3.6rem; border-radius: var(--radius); background: #FFFFFF;
+               display: flex; align-items: center; justify-content: center; }
+.result-label { opacity: 0.85; font-size: 0.85rem; }
+.result-name { font-size: 1.6rem; font-weight: 800; line-height: 1.2; }
+/* ---------- Footer ---------- */
+.cc-footer { margin-top: 3rem; padding: 1.2rem 0 0.4rem; border-top: 1px solid #E8EAF0;
+             display: flex; justify-content: space-between; flex-wrap: wrap; gap: 0.4rem 1.5rem;
+             color: #6B6F80; font-size: 0.85rem; }
+.cc-footer b { color: #2B2D42; font-weight: 600; }
+.result-reco { margin-top: 0.8rem; color: #2B2D42; font-size: 0.95rem; }
+</style>
+"""
+
+
+def segment_css(segments):
+    rules = []
+    for segment in segments:
+        color = seg_color(segment)
+        rules.append(
+            f".st-key-seg_{seg_slug(segment)} {{ border-left: 5px solid {color} !important; "
+            f"border-radius: var(--radius) !important; background: #FFFFFF !important; }}"
+        )
+    return "<style>" + "".join(rules) + "</style>"
+
+st.html(STATIC_CSS)
+
 
 # ---------- Loading ----------
 def load_customers():
-    return db.load_customers().rename(columns={"customer_id": "Customer ID", "recency": "Recency",
-                                                "frequency": "Frequency", "monetary": "Monetary",
-                                                "segment": "Segment"})
+    table = db.load_customers().rename(columns={"customer_id": "Customer ID", "recency": "Recency",
+                                                 "frequency": "Frequency", "monetary": "Monetary",
+                                                 "segment": "Segment"})
+    for column in ["Recency", "Frequency", "Monetary"]:
+        table[column] = table[column].astype(float)
+    return table
 
 
 def load_recommendations():
@@ -87,175 +238,239 @@ def csv_bytes(table):
     return table.to_csv(index=False).encode("utf-8")
 
 
+def chart_header(title, description):
+    """Title + short description together, so it is clear which chart they belong to."""
+    st.subheader(title)
+    st.caption(description)
+
+
+def kpi_row(items):
+    """Row of KPI cards. items = [(icon, label, value), ...]"""
+    cards = "".join(
+        f"<div class='kpi'><div class='kpi-icon'>{icon}</div>"
+        f"<div><div class='kpi-label'>{label}</div><div class='kpi-value'>{value}</div></div></div>"
+        for icon, label, value in items
+    )
+    st.html(f"<div class='kpi-grid'>{cards}</div>")
+
+
 def totals_row(data):
     """Whole-system totals, shown at the top of the Dashboard tab."""
-    cols = st.columns(4)
-    cols[0].metric("Total customers", f"{len(data):,}", border=True)
-    cols[1].metric("Total revenue", f"£{data['Monetary'].sum():,.0f}", border=True)
-    cols[2].metric("Avg orders / customer", f"{data['Frequency'].mean():.1f}", border=True)
-    cols[3].metric("Avg spend / customer", f"£{data['Monetary'].mean():,.0f}", border=True)
+    kpi_row([
+        (icon_svg("users"), "Total customers", f"{len(data):,}"),
+        (icon_svg("chart"), "Total revenue", f"£{data['Monetary'].sum():,.0f}"),
+        (icon_svg("cart"), "Avg orders / customer", f"{data['Frequency'].mean():.1f}"),
+        (icon_svg("card"), "Avg spend / customer", f"£{data['Monetary'].mean():,.0f}"),
+    ])
+
+
+def scatter_axis(title=None):
+    """Few, very pale gridlines so the dots stand out (log scales draw many lines by default)."""
+    return alt.Axis(title=title, tickCount=5, gridColor="#F3F4F7", gridWidth=0.6, domain=False, ticks=False)
+
+
+def with_bar_labels(bars, field, fmt=",", horizontal=False):
+    """Writes each bar's value at its end, so the axis is not needed to read it."""
+    text = (bars.mark_text(align="left", baseline="middle", dx=5, fontSize=12, fontWeight=600) if horizontal
+            else bars.mark_text(baseline="bottom", dy=-4, fontSize=12, fontWeight=600))
+    return bars + text.encode(text=alt.Text(f"{field}:Q", format=fmt), color=alt.value(INK))
+
+
+def scatter_highlight(everyone, highlight, height=360):
+    """All customers as faint dots, with the chosen customers highlighted on top."""
+    highlight = highlight.assign(Monetary=highlight["Monetary"].astype(float).clip(lower=1))
+    everyone = everyone.assign(Monetary=everyone["Monetary"].astype(float).clip(lower=1))
+    x = alt.X("Frequency:Q", scale=alt.Scale(type="log"), axis=scatter_axis("Frequency (orders)"))
+    y = alt.Y("Monetary:Q", scale=alt.Scale(type="log"), axis=scatter_axis("Monetary (£)"))
+    base = alt.Chart(everyone).mark_circle(size=22, opacity=0.35, color="#D9DCE5").encode(x=x, y=y)
+    top = alt.Chart(highlight).mark_point(filled=True, size=230, stroke=INK, strokeWidth=1.5, opacity=1).encode(
+        x=x, y=y,
+        color=alt.Color("Segment:N", scale=seg_scale(highlight["Segment"]), title="Segment"),
+        tooltip=["Customer ID", "Recency", "Frequency", "Monetary", "Segment"],
+    )
+    return (base + top).properties(height=height)
 
 
 def segment_overview(data, recommendations, key):
-    """Segment cards (with campaign-list download), bar chart, scatter plot, and RFM distributions."""
-    st.subheader("Segment profiles")
+    """Segment profile cards, bar chart, scatter plot, revenue donut and RFM box plots."""
     profile = data.groupby("Segment").agg(
         Customers=("Customer ID", "count"),
         Recency=("Recency", "mean"),
         Frequency=("Frequency", "mean"),
         Monetary=("Monetary", "mean"),
-    )
+    ).sort_values("Monetary", ascending=False)
+    total = profile["Customers"].sum()
+    st.html(segment_css(profile.index))
+
+    st.subheader("Segment profiles")
+    st.caption("The groups K-Means found, from highest to lowest average spend. Each card shows who is in "
+               "the group, how they behave, and the campaign we recommend for them.")
 
     for segment, row in profile.iterrows():
-        with st.container(border=True):
-            c1, c2, c3, c4 = st.columns([1.2, 1.5, 3, 1.4], vertical_alignment="center")
+        icon, color = seg_style(segment)
+        share = row["Customers"] / total * 100
+        reco = html.escape(str(recommendations.get(segment, "No recommendation yet -- run main.py.")))
+        with st.container(border=True, key=f"seg_{seg_slug(segment)}"):
+            c1, c2, c3, c4 = st.columns([1.6, 2.3, 2.7, 1.2], vertical_alignment="center", gap="medium")
             with c1:
-                st.markdown(f"**{segment}**")
-                st.metric("Customers", f"{int(row['Customers']):,}")
+                st.html(
+                    f"<div class='seg-head'><div class='seg-icon' style='background:{color}26'>{seg_icon_svg(segment)}</div>"
+                    f"<div><div class='seg-name'>{html.escape(str(segment))}</div>"
+                    f"<div class='seg-count'>{int(row['Customers']):,} <small>customers</small></div>"
+                    f"</div></div>"
+                )
             with c2:
-                st.caption(
-                    f"Avg Recency: {row['Recency']:.0f} days  \n"
-                    f"Avg Frequency: {row['Frequency']:.1f} orders  \n"
-                    f"Avg Monetary: £{row['Monetary']:,.0f}"
+                st.html(
+                    "<div class='stat-row'>"
+                    f"<div class='stat'><div class='stat-label'>Recency</div><div class='stat-value'>{row['Recency']:.0f} days</div></div>"
+                    f"<div class='stat'><div class='stat-label'>Frequency</div><div class='stat-value'>{row['Frequency']:.1f} orders</div></div>"
+                    f"<div class='stat'><div class='stat-label'>Monetary</div><div class='stat-value'>£{row['Monetary']:,.0f}</div></div>"
+                    "</div>"
                 )
             with c3:
-                st.write(recommendations.get(segment, "No recommendation yet -- run main.py."))
+                st.html(f"<div class='reco-label'>Recommended campaign</div><div class='reco-text'>{reco}</div>")
             with c4:
                 st.download_button(
-                    "Download campaign list",
+                    "Campaign list",
                     csv_bytes(data[data["Segment"] == segment]),
-                    file_name=f"{segment.lower().replace(' ', '_')}_campaign_list.csv",
+                    file_name=f"{seg_slug(segment)}_campaign_list.csv",
                     mime="text/csv",
                     key=f"{key}_download_{segment}",
                     on_click="ignore",
+                    icon=":material/download:",
+                    width="stretch",
                 )
 
-        left, right = st.columns(2)
+    st.divider()
+    scale = seg_scale(data["Segment"])
+    left, right = st.columns(2, gap="large")
     with left:
-        st.subheader("Customers per segment")
+        chart_header(
+            "Customers per segment",
+            "How many customers belong to each segment. A longer bar means a bigger group. "
+            "Small segments, like High-Spending Customers, may still be worth targeting.",
+        )
         counts = data["Segment"].value_counts().reset_index()
         counts.columns = ["Segment", "Customers"]
         st.altair_chart(
-            alt.Chart(counts).mark_bar().encode(
-                x=alt.X("Segment:N", sort="-y", title=None),
-                y="Customers:Q",
-                color=alt.Color("Segment:N", legend=None),
+            with_bar_labels(alt.Chart(counts).mark_bar(cornerRadiusTopRight=8, cornerRadiusBottomRight=8).encode(
+                y=alt.Y("Segment:N", sort="-x", title=None, axis=alt.Axis(labelLimit=220)),
+                x=alt.X("Customers:Q"),
+                color=alt.Color("Segment:N", scale=scale, legend=None),
                 tooltip=["Segment", "Customers"],
-            ),
+            ), "Customers", horizontal=True).properties(height=320),
             width="stretch",
         )
-        st.caption(
-            "This chart shows how many customers belong to each segment. A taller bar means "
-            "a bigger group. Use it to see where most of your customers are, and which segments "
-            "are small but may be worth targeting, such as High-Spending Customers."
-        )
     with right:
-        st.subheader("Frequency vs Monetary")
+        chart_header(
+            "Frequency vs Monetary",
+            "Each dot is one customer. Further right means more orders, higher up means more "
+            "spending. Colors show the segment. Hover over a dot for details.",
+        )
         st.altair_chart(
-            alt.Chart(data).mark_circle(size=30, opacity=0.5).encode(
-                x=alt.X("Frequency:Q", scale=alt.Scale(type="log")),
-                y=alt.Y("Monetary:Q", scale=alt.Scale(type="log")),
-                color="Segment:N",
+            alt.Chart(data).mark_circle(size=30, opacity=0.55).encode(
+                x=alt.X("Frequency:Q", scale=alt.Scale(type="log"), axis=scatter_axis("Frequency (orders)")),
+                y=alt.Y("Monetary:Q", scale=alt.Scale(type="log"), axis=scatter_axis("Monetary (£)")),
+                color=alt.Color("Segment:N", scale=scale),
                 tooltip=["Customer ID", "Recency", "Frequency", "Monetary", "Segment"],
             ).interactive(),
             width="stretch",
         )
-        st.caption(
-            "Each dot is one customer. The further right a dot is, the more orders that customer "
-            "made. The higher up it is, the more they spent. The colors show their segment, so you "
-            "can see how the groups separate. Both axes use a log scale so small and big spenders "
-            "fit in one chart. Hover over a dot to see the customer's details."
-        )
 
-        SEGMENT_COLORS = {
-        "High-Spending Customers": "#2a66c4",
-        "Inactive Customers": "#93c6fa",
-        "Loyal Customers": "#e8433a",
-        "Regular Customers": "#f2aeab",
-    }
+    st.divider()
 
-    st.subheader("Revenue share per segment")
-    revenue = data.groupby("Segment", as_index=False)["Monetary"].sum()
-    revenue["Share"] = revenue["Monetary"] / revenue["Monetary"].sum()
-
-    pie_col, text_col = st.columns([2, 1], vertical_alignment="center")
-    with pie_col:
-        st.altair_chart(
-            alt.Chart(revenue).mark_arc(innerRadius=70).encode(
-                theta=alt.Theta("Monetary:Q"),
-                color=alt.Color(
-                    "Segment:N",
-                    scale=alt.Scale(domain=list(SEGMENT_COLORS), range=list(SEGMENT_COLORS.values())),
-                    legend=None,
-                ),
+    # ----- Share of customers vs share of revenue -----
+    chart_header(
+        "Share of customers vs share of revenue",
+        "For each segment, the gray bar is its share of all customers and the coral bar is its share "
+        "of all revenue. A coral bar taller than the gray one means the segment earns more than its "
+        "size suggests; a shorter one means many customers but little money. Hover for the exact numbers.",
+    )
+    shares = data.groupby("Segment").agg(Customers=("Customer ID", "count"), Revenue=("Monetary", "sum"))
+    shares["Share of customers"] = shares["Customers"] / shares["Customers"].sum()
+    shares["Share of revenue"] = shares["Revenue"] / shares["Revenue"].sum()
+    order = shares.sort_values("Share of revenue", ascending=False).index.tolist()
+    shares = shares.reset_index().melt(
+        id_vars=["Segment", "Customers", "Revenue"],
+        value_vars=["Share of customers", "Share of revenue"], var_name="Measure", value_name="Share",
+    )
+    measures = ["Share of customers", "Share of revenue"]
+    bars = alt.Chart(shares).encode(
+        x=alt.X("Segment:N", sort=order, title=None, axis=alt.Axis(labelAngle=0, labelLimit=160)),
+        xOffset=alt.XOffset("Measure:N", sort=measures),
+        y=alt.Y("Share:Q", title="Share of total", axis=alt.Axis(format="%")),
+    )
+    st.altair_chart(
+        (
+            bars.mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+                color=alt.Color("Measure:N", sort=measures, title=None,
+                                scale=alt.Scale(domain=measures, range=["#6B7389", CORAL]),
+                                legend=alt.Legend(orient="top")),
                 tooltip=[
                     alt.Tooltip("Segment:N"),
-                    alt.Tooltip("Monetary:Q", title="Revenue (£)", format=",.0f"),
-                    alt.Tooltip("Share:Q", title="Share of revenue", format=".1%"),
+                    alt.Tooltip("Measure:N", title="Measure"),
+                    alt.Tooltip("Share:Q", format=".1%"),
+                    alt.Tooltip("Customers:Q", format=","),
+                    alt.Tooltip("Revenue:Q", title="Revenue (£)", format=",.0f"),
                 ],
-            ).properties(height=320),
-            width="stretch",
-        )
-    with text_col:
-        legend_lines = "".join(
-            f"<div style='margin-bottom:6px'><span style='color:{color}; font-size:1.1rem'>●</span> "
-            f"{name}</div>"
-            for name, color in SEGMENT_COLORS.items()
-        )
-        st.markdown(f"<div style='color:#6b6f80'><b>Segment</b>{legend_lines}</div>",
-                    unsafe_allow_html=True)
-        st.caption(
-            "This chart shows how much of the total revenue comes from each segment. "
-            "A bigger slice means that segment brings in more money. Compare it with the "
-            "'Customers per segment' chart: a small group can still earn a big share of revenue. "
-            "Hover over a slice to see the exact amount and percentage."
-        )
+            )
+            + bars.mark_text(dy=-8, fontSize=12, color=INK).encode(text=alt.Text("Share:Q", format=".0%"))
+        ).properties(height=360),
+        width="stretch",
+    )
 
-    st.subheader("How each segment behaves (Recency, Frequency, Monetary)")
-    st.caption(
-        "Each dot is one customer. The box covers the middle 50% of customers in that segment, "
-        "and the line inside it is the median. A higher box means higher values: more days since "
-        "the last purchase (Recency), more orders (Frequency), or more spending (Monetary)."
+    st.divider()
+
+    # ----- Box plots -----
+    chart_header(
+        "How each segment behaves (Recency, Frequency, Monetary)",
+        "Each dot is one customer. The box covers the middle 50% of the segment and the line "
+        "inside is the median. A higher box means more days since the last purchase (Recency), "
+        "more orders (Frequency), or more spending (Monetary).",
     )
     metric_tabs = st.tabs(["Recency (days)", "Frequency (orders)", "Monetary (£)"])
     for tab, metric in zip(metric_tabs, ["Recency", "Frequency", "Monetary"]):
         with tab:
-            log_scale = metric != "Recency"
-            scale = alt.Scale(type="log") if log_scale else alt.Scale(type="linear")
+            axis_scale = alt.Scale(type="log") if metric != "Recency" else alt.Scale(type="linear")
             box = alt.Chart(data).mark_boxplot(size=40).encode(
-                x=alt.X("Segment:N", title=None), y=alt.Y(f"{metric}:Q", scale=scale), color="Segment:N")
+                x=alt.X("Segment:N", title=None, axis=alt.Axis(labelAngle=0)),
+                y=alt.Y(f"{metric}:Q", scale=axis_scale),
+                color=alt.Color("Segment:N", scale=scale, legend=None))
             points = alt.Chart(data).mark_circle(size=8, opacity=0.3).encode(
-                x="Segment:N", y=alt.Y(f"{metric}:Q", scale=scale), color=alt.Color("Segment:N", legend=None))
+                x="Segment:N", y=alt.Y(f"{metric}:Q", scale=axis_scale),
+                color=alt.Color("Segment:N", scale=scale, legend=None))
             st.altair_chart((box + points).properties(height=320), width="stretch")
 
 
 def recommendation_evidence(key):
     """Association Rule Mining results shown as a chart per segment."""
     rules = load_segment_rules()
-    st.subheader("Product pairings per segment (Association Rule Mining)")
-    st.caption(
-        "Each bar is a rule: customers who buy the items on the left of the arrow also buy "
-        "the items on the right. A longer bar (higher lift) means the items sell together much "
-        "more than chance. A darker bar means the pairing is true more often (confidence)."
+    st.divider()
+    chart_header(
+        "Product pairings per segment (Association Rule Mining)",
+        "Each bar is a rule: customers who buy the items on the left of the arrow also buy the items "
+        "on the right. A longer bar (higher lift) means the items sell together much more than chance. "
+        "A darker bar means the pairing is true more often (confidence).",
     )
     if rules.empty:
         st.write("No rules yet -- run main.py first.")
         return
 
+    rules = rules.copy()
     for column in ["support", "confidence", "lift"]:
         rules[column] = rules[column].astype(float)
     rules["Rule"] = (rules["antecedents"] + "  →  " + rules["consequents"]).str.slice(0, 80)
 
     segments = sorted(rules["segment"].unique())
-    for tab, segment in zip(st.tabs(segments), segments):
+    for tab, segment in zip(st.tabs(list(segments)), segments):
         group = rules[rules["segment"] == segment]
         with tab:
             st.altair_chart(
-                alt.Chart(group).mark_bar().encode(
+                with_bar_labels(alt.Chart(group).mark_bar().encode(
                     x=alt.X("lift:Q", title="Lift (strength of the pairing)"),
                     y=alt.Y("Rule:N", sort="-x", title=None, axis=alt.Axis(labelLimit=450)),
                     color=alt.Color("confidence:Q", title="Confidence",
-                                    scale=alt.Scale(scheme="blues", domain=[0, 1])),
+                                    scale=alt.Scale(range=["#FFD0CA", CORAL_DARK], domain=[0, 1])),
                     tooltip=[
                         alt.Tooltip("antecedents:N", title="If they buy"),
                         alt.Tooltip("consequents:N", title="They also buy"),
@@ -263,7 +478,7 @@ def recommendation_evidence(key):
                         alt.Tooltip("confidence:Q", format=".0%", title="Confidence"),
                         alt.Tooltip("lift:Q", format=".2f", title="Lift"),
                     ],
-                ).properties(height=60 * len(group) + 40),
+                ), "lift", fmt=".2f", horizontal=True).properties(height=60 * len(group) + 40),
                 width="stretch",
             )
             with st.expander("See the full table"):
@@ -290,6 +505,7 @@ def customer_table(data, key):
                        mime="text/csv", key=f"{key}_download", on_click="ignore")
     return filtered
 
+
 def customer_details(row):
     """Details of one customer: segment, top purchases, and which segment rules fit them."""
     customer_id = int(row["Customer ID"])
@@ -307,11 +523,11 @@ def customer_details(row):
 
     st.markdown("**Most bought products**")
     st.altair_chart(
-        alt.Chart(items.head(10)).mark_bar().encode(
+        with_bar_labels(alt.Chart(items.head(10)).mark_bar(color=CORAL).encode(
             x=alt.X("units:Q", title="Units bought"),
             y=alt.Y("description:N", sort="-x", title=None, axis=alt.Axis(labelLimit=350)),
             tooltip=["description", "units"],
-        ).properties(height=300),
+        ), "units", horizontal=True).properties(height=300),
         width="stretch",
     )
 
@@ -337,50 +553,44 @@ def customer_details(row):
     )
 
 
-# ---------- Page ----------
-try:
-    system_ready = db.has_data()
-except OperationalError:
-    st.error(
-        "Could not connect to MySQL. Start the **MySQL** module in the XAMPP Control Panel, "
-        "then refresh this page. If your MySQL root user has a password, add it in config.py "
-        "(DB_CONFIG)."
-    )
-    st.stop()
-
-if not system_ready:
-    st.error("Results not found. Run main.py first (python main.py) to build the database.")
-    st.stop()
-
-customers = load_customers()
-recommendations = load_recommendations()
-
-st.title("ClusterCart")
-st.caption("Customer Segmentation and Targeted Marketing Recommendation System")
-
-tab_dashboard, tab_new, tab_table = st.tabs(["Dashboard", "New Customers", "Customer Table"])
-
-# ----- Tab 1: overview of the existing customers -----
-with tab_dashboard:
-    totals_row(customers)
-    st.divider()
-    segment_overview(customers, recommendations, key="main")
-    recommendation_evidence(key="main")
-
-# ----- Tab 2: new customers (one at a time, or upload a file that updates the dashboard) -----
-with tab_new:
+# ---------- New Customers tab ----------
+def assign_one_customer(customers, recommendations):
+    """Form on the left; the result and a chart showing where the customer lands on the right."""
     st.subheader("Assign one customer")
-    c1, c2, c3 = st.columns(3)
-    recency = c1.number_input("Recency (days since last purchase)", min_value=0, value=30)
-    frequency = c2.number_input("Frequency (number of orders)", min_value=1, value=5)
-    monetary = c3.number_input("Monetary (total spent, GBP)", min_value=0.0, value=500.0)
+    st.caption("Enter a new customer's RFM values to see which segment they belong to, "
+               "and where they sit among your existing customers.")
+    form_col, result_col = st.columns([1, 1.5], gap="large")
 
-    if st.button("Assign segment"):
-        segment = assign_new_customer(recency, frequency, monetary)
-        st.success(f"Segment: {segment}")
-        st.write(f"Recommended action: **{recommendations.get(segment, 'No recommendation yet.')}**")
+    with form_col:
+        with st.container(border=True):
+            recency = st.number_input("Recency (days since last purchase)", min_value=0, value=30)
+            frequency = st.number_input("Frequency (number of orders)", min_value=1, value=5)
+            monetary = st.number_input("Monetary (total spent, GBP)", min_value=0.0, value=500.0)
+            if st.button("Assign segment", type="primary", width="stretch"):
+                segment = assign_new_customer(recency, frequency, monetary)
+                st.session_state["assigned"] = {"Customer ID": "New customer", "Recency": float(recency),
+                                                "Frequency": float(frequency), "Monetary": float(monetary),
+                                                "Segment": segment}
 
-    st.divider()
+    with result_col:
+        assigned = st.session_state.get("assigned")
+        if not assigned:
+            st.info("Fill in the form and click **Assign segment**. The result and a chart will show up here.")
+            return
+        segment = assigned["Segment"]
+        reco = html.escape(str(recommendations.get(segment, "No recommendation yet.")))
+        st.html(
+            f"<div class='result'><div class='result-icon' style='background:#FFFFFF'>{seg_icon_svg(segment)}</div>"
+            f"<div><div class='result-label'>Assigned segment</div>"
+            f"<div class='result-name'>{html.escape(str(segment))}</div></div></div>"
+            f"<div class='result-reco'><b>Recommended action:</b> {reco}</div>"
+        )
+        st.altair_chart(scatter_highlight(customers, pd.DataFrame([assigned]), height=300), width="stretch")
+        st.caption("The big marker is the new customer. The faint dots are your existing customers, "
+                   "so you can see which group they land in.")
+
+
+def upload_section(customers):
     st.subheader("Add new transactions (upload a file)")
     st.write(
         "Upload a transactions file (.csv or .xlsx) with the same columns as the Online Retail II data: "
@@ -412,16 +622,43 @@ with tab_new:
 
     update = st.session_state.get("last_update")
     if update:
-        st.success(f"Dashboard updated: {update['new_customers']} new customer(s) added and "
-                   f"{update['existing_customers']} existing customer(s) recalculated. "
-                   f"The system now has {update['total_customers']:,} customers.")
+        st.success("Dashboard updated. The new customers are already counted in the Dashboard and Customer Table tabs.")
+        kpi_row([
+            (icon_svg("user-plus"), "New customers", f"{update['new_customers']:,}"),
+            (icon_svg("refresh"), "Existing recalculated", f"{update['existing_customers']:,}"),
+            (icon_svg("swap"), "Changed segment", f"{update['moved']:,}"),
+            (icon_svg("users"), "Total customers now", f"{update['total_customers']:,}"),
+        ])
         if update["already_stored"]:
             st.info(f"{update['already_stored']} line(s) in the file were already in the system, "
                     "so they were not counted twice.")
-        if update["moved"]:
-            st.info(f"{update['moved']} existing customer(s) are now in a different segment.")
         st.caption(f"Reference date ('today' for Recency): {update['reference_date']:%Y-%m-%d}. "
-                  "Recommendations are not recalculated by an upload -- run main.py to refresh those.")
+                   "Recommendations are not recalculated by an upload -- run main.py to refresh those.")
+
+        affected = update["affected"].copy()
+        for column in ["Recency", "Frequency", "Monetary"]:
+            affected[column] = affected[column].astype(float)
+
+        left, right = st.columns(2, gap="large")
+        with left:
+            chart_header("Where the uploaded customers landed",
+                         "How many customers from this file went into each segment.")
+            counts = affected["Segment"].value_counts().reset_index()
+            counts.columns = ["Segment", "Customers"]
+            st.altair_chart(
+                with_bar_labels(alt.Chart(counts).mark_bar(cornerRadiusTopLeft=8, cornerRadiusTopRight=8).encode(
+                    x=alt.X("Segment:N", sort="-y", title=None, axis=alt.Axis(labelAngle=0, labelLimit=140)),
+                    y="Customers:Q",
+                    color=alt.Color("Segment:N", scale=seg_scale(counts["Segment"]), legend=None),
+                    tooltip=["Segment", "Customers"],
+                ), "Customers").properties(height=340),
+                width="stretch",
+            )
+        with right:
+            chart_header("Uploaded customers among everyone",
+                         "The big markers are the customers from this file. The faint dots are all other customers.")
+            st.altair_chart(scatter_highlight(customers, affected), width="stretch")
+
         with st.expander("Cleaning log"):
             st.dataframe(update["cleaning_log"], hide_index=True)
         st.subheader("Customers in this file")
@@ -436,7 +673,45 @@ with tab_new:
             st.session_state["last_update"] = None
             st.rerun()
 
-# ----- Tab 3: browse the existing customers -----
+
+# ---------- Page ----------
+try:
+    system_ready = db.has_data()
+except OperationalError:
+    st.error(
+        "Could not connect to MySQL. Start the **MySQL** module in the XAMPP Control Panel, "
+        "then refresh this page. If your MySQL root user has a password, add it in config.py "
+        "(DB_CONFIG)."
+    )
+    st.stop()
+
+if not system_ready:
+    st.error("Results not found. Run main.py first (python main.py) to build the database.")
+    st.stop()
+
+customers = load_customers()
+recommendations = load_recommendations()
+
+st.html(
+    f"<div class='cc-brand'><img src='{LOGO_URI}' alt='ClusterCart logo'><span>Cluster<b>Cart</b></span></div>"
+    "<div class='cc-kicker'>Customer Segmentation and Targeted Marketing Recommendation System</div>"
+)
+
+tab_dashboard, tab_new, tab_table = st.tabs(["Dashboard", "New Customers", "Customer Table"])
+
+# ----- Tab 1: overview of the existing customers -----
+with tab_dashboard:
+    totals_row(customers)
+    st.divider()
+    segment_overview(customers, recommendations, key="main")
+    recommendation_evidence(key="main")
+
+# ----- Tab 2: new customers (one at a time, or upload a file that updates the dashboard) -----
+with tab_new:
+    assign_one_customer(customers, recommendations)
+    st.divider()
+    upload_section(customers)
+
 # ----- Tab 3: browse the existing customers -----
 with tab_table:
     filtered = customer_table(customers, key="table")
@@ -445,3 +720,11 @@ with tab_table:
         customer_details(filtered.iloc[0])
     else:
         st.caption("Tip: type a full Customer ID in the search box to see that customer's details here.")
+
+# ----- Footer (outside the tabs, so it shows on every tab) -----
+st.html(
+    "<div class='cc-footer'>"
+    "<span><b>ClusterCart</b> · Flores, Ambrocio, Diocares · Elective 4</span>"
+    "<span>Data: Online Retail II (2010–2011)</span>"
+    "</div>"
+)

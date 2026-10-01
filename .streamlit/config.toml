@@ -1,0 +1,12 @@
+[theme]
+base = "light"
+baseRadius = "medium"
+primaryColor = "#FF5A4F"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FFF3F1"
+textColor = "#2B2D42"
+font = "Plus Jakarta Sans:https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+headingFont = "Plus Jakarta Sans:https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+
+[client]
+toolbarMode = "viewer"
