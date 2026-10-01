@@ -139,6 +139,16 @@ def load_transactions():
     import pandas as pd
     return pd.read_sql("SELECT * FROM transactions", get_engine(), parse_dates=["invoice_date"])
 
+def customer_items(customer_id):
+    """Every product one customer bought, with total units, biggest first."""
+    import pandas as pd
+    query = text("""
+        SELECT description, SUM(quantity) AS units
+        FROM transactions WHERE customer_id = :cid
+        GROUP BY description ORDER BY units DESC
+    """)
+    return pd.read_sql(query, get_engine(), params={"cid": int(customer_id)})
+
 
 # ---------------- Customers ----------------
 def replace_customers(df):

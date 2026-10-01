@@ -17,6 +17,34 @@ from rfm import make_invoice_table
 
 st.set_page_config(page_title="ClusterCart", layout="wide")
 
+st.html(
+    """
+    <style>
+    /* Main tabs: nasa right side, itinaas para pumantay sa title */
+    [role="tablist"] {
+        justify-content: flex-end !important;
+        gap: 1.75rem !important;
+        position: relative;
+        top: -4.8rem;
+    }
+    [role="tab"] {
+        font-size: 1.35rem !important;   /* mas malaki nang konti, pero mas maliit sa title */
+        font-weight: 600 !important;
+    }
+
+    /* Ibalik sa normal ang maliliit na tabs sa loob (Recency / Frequency / Monetary) */
+    [role="tabpanel"] [role="tablist"] {
+        justify-content: flex-start !important;
+        gap: 0.5rem !important;
+        top: 0;
+    }
+    [role="tabpanel"] [role="tab"] {
+        font-size: 1rem !important;
+    }
+    </style>
+    """
+)
+
 SAMPLE_FILE = """Invoice,StockCode,Description,Quantity,InvoiceDate,Price,Customer ID,Country
 700001,85123A,SAMPLE ITEM A,6,2011-12-01 10:30:00,2.55,90001,United Kingdom
 700002,22423,SAMPLE ITEM B,12,2011-12-05 14:10:00,4.95,90001,United Kingdom
@@ -62,10 +90,10 @@ def csv_bytes(table):
 def totals_row(data):
     """Whole-system totals, shown at the top of the Dashboard tab."""
     cols = st.columns(4)
-    cols[0].metric("Total customers", f"{len(data):,}")
-    cols[1].metric("Total revenue", f"£{data['Monetary'].sum():,.0f}")
-    cols[2].metric("Avg orders / customer", f"{data['Frequency'].mean():.1f}")
-    cols[3].metric("Avg spend / customer", f"£{data['Monetary'].mean():,.0f}")
+    cols[0].metric("Total customers", f"{len(data):,}", border=True)
+    cols[1].metric("Total revenue", f"£{data['Monetary'].sum():,.0f}", border=True)
+    cols[2].metric("Avg orders / customer", f"{data['Frequency'].mean():.1f}", border=True)
+    cols[3].metric("Avg spend / customer", f"£{data['Monetary'].mean():,.0f}", border=True)
 
 
 def segment_overview(data, recommendations, key):
@@ -78,17 +106,21 @@ def segment_overview(data, recommendations, key):
         Monetary=("Monetary", "mean"),
     )
 
-    for column, (segment, row) in zip(st.columns(len(profile)), profile.iterrows()):
-        with column:
-            with st.container(border=True):
+    for segment, row in profile.iterrows():
+        with st.container(border=True):
+            c1, c2, c3, c4 = st.columns([1.2, 1.5, 3, 1.4], vertical_alignment="center")
+            with c1:
                 st.markdown(f"**{segment}**")
                 st.metric("Customers", f"{int(row['Customers']):,}")
+            with c2:
                 st.caption(
                     f"Avg Recency: {row['Recency']:.0f} days  \n"
                     f"Avg Frequency: {row['Frequency']:.1f} orders  \n"
                     f"Avg Monetary: £{row['Monetary']:,.0f}"
                 )
-                st.info(recommendations.get(segment, "No recommendation yet -- run main.py."))
+            with c3:
+                st.write(recommendations.get(segment, "No recommendation yet -- run main.py."))
+            with c4:
                 st.download_button(
                     "Download campaign list",
                     csv_bytes(data[data["Segment"] == segment]),
@@ -98,7 +130,7 @@ def segment_overview(data, recommendations, key):
                     on_click="ignore",
                 )
 
-    left, right = st.columns(2)
+        left, right = st.columns(2)
     with left:
         st.subheader("Customers per segment")
         counts = data["Segment"].value_counts().reset_index()
@@ -112,6 +144,11 @@ def segment_overview(data, recommendations, key):
             ),
             width="stretch",
         )
+        st.caption(
+            "This chart shows how many customers belong to each segment. A taller bar means "
+            "a bigger group. Use it to see where most of your customers are, and which segments "
+            "are small but may be worth targeting, such as High-Spending Customers."
+        )
     with right:
         st.subheader("Frequency vs Monetary")
         st.altair_chart(
@@ -123,9 +160,63 @@ def segment_overview(data, recommendations, key):
             ).interactive(),
             width="stretch",
         )
+        st.caption(
+            "Each dot is one customer. The further right a dot is, the more orders that customer "
+            "made. The higher up it is, the more they spent. The colors show their segment, so you "
+            "can see how the groups separate. Both axes use a log scale so small and big spenders "
+            "fit in one chart. Hover over a dot to see the customer's details."
+        )
+
+        SEGMENT_COLORS = {
+        "High-Spending Customers": "#2a66c4",
+        "Inactive Customers": "#93c6fa",
+        "Loyal Customers": "#e8433a",
+        "Regular Customers": "#f2aeab",
+    }
+
+    st.subheader("Revenue share per segment")
+    revenue = data.groupby("Segment", as_index=False)["Monetary"].sum()
+    revenue["Share"] = revenue["Monetary"] / revenue["Monetary"].sum()
+
+    pie_col, text_col = st.columns([2, 1], vertical_alignment="center")
+    with pie_col:
+        st.altair_chart(
+            alt.Chart(revenue).mark_arc(innerRadius=70).encode(
+                theta=alt.Theta("Monetary:Q"),
+                color=alt.Color(
+                    "Segment:N",
+                    scale=alt.Scale(domain=list(SEGMENT_COLORS), range=list(SEGMENT_COLORS.values())),
+                    legend=None,
+                ),
+                tooltip=[
+                    alt.Tooltip("Segment:N"),
+                    alt.Tooltip("Monetary:Q", title="Revenue (£)", format=",.0f"),
+                    alt.Tooltip("Share:Q", title="Share of revenue", format=".1%"),
+                ],
+            ).properties(height=320),
+            width="stretch",
+        )
+    with text_col:
+        legend_lines = "".join(
+            f"<div style='margin-bottom:6px'><span style='color:{color}; font-size:1.1rem'>●</span> "
+            f"{name}</div>"
+            for name, color in SEGMENT_COLORS.items()
+        )
+        st.markdown(f"<div style='color:#6b6f80'><b>Segment</b>{legend_lines}</div>",
+                    unsafe_allow_html=True)
+        st.caption(
+            "This chart shows how much of the total revenue comes from each segment. "
+            "A bigger slice means that segment brings in more money. Compare it with the "
+            "'Customers per segment' chart: a small group can still earn a big share of revenue. "
+            "Hover over a slice to see the exact amount and percentage."
+        )
 
     st.subheader("How each segment behaves (Recency, Frequency, Monetary)")
-    st.caption("Each dot is one customer. The box shows the middle 50% and the line inside is the median.")
+    st.caption(
+        "Each dot is one customer. The box covers the middle 50% of customers in that segment, "
+        "and the line inside it is the median. A higher box means higher values: more days since "
+        "the last purchase (Recency), more orders (Frequency), or more spending (Monetary)."
+    )
     metric_tabs = st.tabs(["Recency (days)", "Frequency (orders)", "Monetary (£)"])
     for tab, metric in zip(metric_tabs, ["Recency", "Frequency", "Monetary"]):
         with tab:
@@ -139,19 +230,43 @@ def segment_overview(data, recommendations, key):
 
 
 def recommendation_evidence(key):
-    """Show the actual Association Rule Mining results behind the recommendations above."""
+    """Association Rule Mining results shown as a chart per segment."""
     rules = load_segment_rules()
-    with st.expander("How these recommendations were found (Association Rule Mining)"):
-        st.caption(
-            "Each row is a rule found in that segment's orders: customers who buy the "
-            "'antecedents' also buy the 'consequents'. Confidence = how often that is true. "
-            "Lift > 1 means the items sell together more than random chance would predict."
-        )
-        if rules.empty:
-            st.write("No rules yet -- run main.py first.")
-        else:
-            for segment, group in rules.groupby("segment"):
-                st.markdown(f"**{segment}**")
+    st.subheader("Product pairings per segment (Association Rule Mining)")
+    st.caption(
+        "Each bar is a rule: customers who buy the items on the left of the arrow also buy "
+        "the items on the right. A longer bar (higher lift) means the items sell together much "
+        "more than chance. A darker bar means the pairing is true more often (confidence)."
+    )
+    if rules.empty:
+        st.write("No rules yet -- run main.py first.")
+        return
+
+    for column in ["support", "confidence", "lift"]:
+        rules[column] = rules[column].astype(float)
+    rules["Rule"] = (rules["antecedents"] + "  →  " + rules["consequents"]).str.slice(0, 80)
+
+    segments = sorted(rules["segment"].unique())
+    for tab, segment in zip(st.tabs(segments), segments):
+        group = rules[rules["segment"] == segment]
+        with tab:
+            st.altair_chart(
+                alt.Chart(group).mark_bar().encode(
+                    x=alt.X("lift:Q", title="Lift (strength of the pairing)"),
+                    y=alt.Y("Rule:N", sort="-x", title=None, axis=alt.Axis(labelLimit=450)),
+                    color=alt.Color("confidence:Q", title="Confidence",
+                                    scale=alt.Scale(scheme="blues", domain=[0, 1])),
+                    tooltip=[
+                        alt.Tooltip("antecedents:N", title="If they buy"),
+                        alt.Tooltip("consequents:N", title="They also buy"),
+                        alt.Tooltip("support:Q", format=".1%", title="Support"),
+                        alt.Tooltip("confidence:Q", format=".0%", title="Confidence"),
+                        alt.Tooltip("lift:Q", format=".2f", title="Lift"),
+                    ],
+                ).properties(height=60 * len(group) + 40),
+                width="stretch",
+            )
+            with st.expander("See the full table"):
                 st.dataframe(
                     group[["antecedents", "consequents", "support", "confidence", "lift"]],
                     hide_index=True, width="stretch", key=f"{key}_rules_{segment}",
@@ -173,6 +288,53 @@ def customer_table(data, key):
     st.dataframe(filtered, width="stretch", hide_index=True)
     st.download_button("Download this table (CSV)", csv_bytes(filtered), file_name="customers.csv",
                        mime="text/csv", key=f"{key}_download", on_click="ignore")
+    return filtered
+
+def customer_details(row):
+    """Details of one customer: segment, top purchases, and which segment rules fit them."""
+    customer_id = int(row["Customer ID"])
+    st.subheader(f"Customer {customer_id}")
+
+    cols = st.columns(4)
+    cols[0].metric("Segment", row["Segment"], border=True)
+    cols[1].metric("Recency", f"{row['Recency']:.0f} days", border=True)
+    cols[2].metric("Frequency", f"{row['Frequency']:.0f} orders", border=True)
+    cols[3].metric("Monetary", f"£{float(row['Monetary']):,.0f}", border=True)
+
+    items = db.customer_items(customer_id)
+    items["units"] = items["units"].astype(float)
+    bought = set(items["description"])
+
+    st.markdown("**Most bought products**")
+    st.altair_chart(
+        alt.Chart(items.head(10)).mark_bar().encode(
+            x=alt.X("units:Q", title="Units bought"),
+            y=alt.Y("description:N", sort="-x", title=None, axis=alt.Axis(labelLimit=350)),
+            tooltip=["description", "units"],
+        ).properties(height=300),
+        width="stretch",
+    )
+
+    rules = load_segment_rules()
+    rules = rules[rules["segment"] == row["Segment"]].copy()
+    if rules.empty:
+        return
+
+    def fit(rule):
+        if not set(rule["antecedents"].split(", ")) <= bought:
+            return "Not a fit yet"
+        if set(rule["consequents"].split(", ")) <= bought:
+            return "Already buys both"
+        return "Recommend now"
+
+    rules["Fit for this customer"] = rules.apply(fit, axis=1)
+    st.markdown("**Rules from this customer's segment**")
+    st.caption("'Recommend now' = the customer already buys the first items but not the "
+               "paired items yet, so they are the best target for that offer.")
+    st.dataframe(
+        rules[["Fit for this customer", "antecedents", "consequents", "confidence", "lift"]],
+        hide_index=True, width="stretch",
+    )
 
 
 # ---------- Page ----------
@@ -275,5 +437,11 @@ with tab_new:
             st.rerun()
 
 # ----- Tab 3: browse the existing customers -----
+# ----- Tab 3: browse the existing customers -----
 with tab_table:
-    customer_table(customers, key="table")
+    filtered = customer_table(customers, key="table")
+    if len(filtered) == 1:
+        st.divider()
+        customer_details(filtered.iloc[0])
+    else:
+        st.caption("Tip: type a full Customer ID in the search box to see that customer's details here.")
