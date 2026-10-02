@@ -52,6 +52,7 @@ ICONS = {
              '<rect x="31" y="27" width="7" height="14"/><path d="M8 20l10-9 8 6 14-11"/><path d="M33 6h8v8"/>',
     "cart": '<path d="M5 9h6l5 23h22l4-16H13"/><circle cx="19" cy="39" r="2.8"/><circle cx="35" cy="39" r="2.8"/>',
     "card": '<rect x="5" y="11" width="38" height="26" rx="4"/><path d="M5 20h38M11 30h10"/>',
+    "revenue": '<circle cx="24" cy="24" r="18"/><path d="M30 17c-1.5-1.5-3.5-2.3-6-2.3-3.5 0-6 1.8-6 4.5s2 4 6 5 6 2.3 6 5-2.5 4.8-6 4.8c-2.5 0-4.5-.8-6-2.3M24 11v26"/>',
     "star": '<path d="M24 5l5.6 12.4L43 19l-10 9.2L35.6 42 24 35.2 12.4 42 15 28.2 5 19l13.4-1.6z"/>',
     "shield": '<path d="M24 5l15 5.5V23c0 9.5-6.5 17-15 21-8.5-4-15-11.5-15-21V10.5z"/><path d="M16 24l6 6 11-12"/>',
     "tag": '<path d="M7 7h17l19 19-17 17L7 24z"/><circle cx="16" cy="16" r="3"/>',
@@ -79,8 +80,10 @@ def clustercart_theme():
 
 
 def icon_svg(name, size=28):
-    return (f'<svg viewBox="0 0 48 48" width="{size}" height="{size}" fill="none" stroke="{INK}" '
-            f'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none" stroke="{INK}" '
+           f'stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">{ICONS[name]}</svg>')
+    image = base64.b64encode(svg.encode()).decode()
+    return f'<img src="data:image/svg+xml;base64,{image}" width="{size}" height="{size}" alt="">'
 
 
 # Icon and color for each segment type (matched by name, so renamed segments still work).
@@ -133,9 +136,18 @@ STATIC_CSS = """
 /* ---------- Nav tabs (right side) ---------- */
 [role="tablist"] { justify-content: flex-end !important; gap: 1.75rem !important;
                    position: relative; top: var(--nav-up); }
-[role="tab"] { font-size: 1.55rem !important; font-weight: 600 !important; }
+[role="tab"] { background: #FFF1EF !important; border-radius: 6px !important;
+               color: #2B2D42 !important; font-size: 1.7rem !important; font-weight: 700 !important;
+               padding: 0.55rem 0.85rem !important; transition: background-color 0.15s ease, color 0.15s ease; }
+[role="tab"]:hover { background: #FFE1DD !important; color: #2B2D42 !important; }
+[role="tab"][aria-selected="true"] { background: #D93A30 !important; color: #FFFFFF !important; }
 [role="tabpanel"] [role="tablist"] { justify-content: flex-start !important; gap: 0.5rem !important; top: 0 !important; }
 [role="tabpanel"] [role="tab"] { font-size: 1rem !important; }
+@media (max-width: 640px) {
+    [role="tablist"] { justify-content: flex-start !important; gap: 0.4rem !important;
+                                            position: static !important; top: 0 !important; flex-wrap: wrap !important; }
+    [role="tab"] { font-size: 1.15rem !important; padding: 0.4rem 0.55rem !important; }
+}
 
 /* ---------- Buttons ---------- */
 .stButton > button, .stDownloadButton > button { border-radius: var(--radius); font-weight: 600; }
@@ -156,8 +168,8 @@ STATIC_CSS = """
 .seg-icon { width: 3.6rem; height: 3.6rem; border-radius: var(--radius); display: flex;
             align-items: center; justify-content: center; }
 .seg-name { font-weight: 800; font-size: 1.15rem; color: #2B2D42; }
-.seg-count { font-size: 1.6rem; font-weight: 800; color: #2B2D42; line-height: 1.2; }
-.seg-count small { font-size: 0.85rem; font-weight: 500; color: #6B6F80; }
+.seg-count { display: flex; align-items: center; gap: 0.45rem; font-size: 1.6rem; font-weight: 800; color: #2B2D42; line-height: 1.2; }
+.seg-count-icon { display: flex; flex: 0 0 auto; }
 .seg-bar { height: 8px; border-radius: 6px; background: #F1E4E2; margin-top: 0.7rem; overflow: hidden; }
 .seg-bar div { height: 100%; border-radius: 6px; }
 .stat-row { display: flex; gap: 0.6rem; flex-wrap: wrap; }
@@ -219,16 +231,19 @@ def load_segment_rules():
     return rules[rules["antecedents"] != ""]      # drop the "not enough data" placeholder rows
 
 
-def upload_and_add(file_bytes, file_name):
-    """Read an uploaded transactions file, clean it, and add it to the system's data."""
+def prepare_upload_preview(file_bytes, file_name):
+    """Read and clean an uploaded transactions file without saving it."""
     raw = read_uploaded_file(file_bytes, file_name)
     df, cleaning_log = clean_data(prepare_uploaded_data(raw))
     if df.empty:
         raise ValueError("No valid rows are left after cleaning (missing Customer ID, cancellations, "
                          "negative quantity, zero price). Please check the file.")
+    return df, cleaning_log
 
-    transactions = db.to_transactions_table(df)
-    summary = add_transactions(transactions)
+
+def upload_and_add(df, cleaning_log):
+    """Save a cleaned upload and return the dashboard summary."""
+    summary = add_transactions(db.to_transactions_table(df))
     summary["cleaning_log"] = cleaning_log
     return summary
 
@@ -258,7 +273,7 @@ def totals_row(data):
     """Whole-system totals, shown at the top of the Dashboard tab."""
     kpi_row([
         (icon_svg("users"), "Total customers", f"{len(data):,}"),
-        (icon_svg("chart"), "Total revenue", f"£{data['Monetary'].sum():,.0f}"),
+        (icon_svg("revenue"), "Total revenue", f"£{data['Monetary'].sum():,.0f}"),
         (icon_svg("cart"), "Avg orders / customer", f"{data['Frequency'].mean():.1f}"),
         (icon_svg("card"), "Avg spend / customer", f"£{data['Monetary'].mean():,.0f}"),
     ])
@@ -291,7 +306,14 @@ def scatter_highlight(everyone, highlight, height=360):
     return (base + top).properties(height=height)
 
 
-def segment_overview(data, recommendations, key):
+def open_segment_customers(segment):
+    """Select a segment and navigate to its customers in the Customer Table tab."""
+    st.session_state["table_segments_filter"] = [segment]
+    st.session_state["table_search"] = ""
+    st.session_state["main_tabs"] = "Customer Table"
+
+
+def segment_overview(data, recommendations):
     """Segment profile cards, bar chart, scatter plot, revenue donut and RFM box plots."""
     profile = data.groupby("Segment").agg(
         Customers=("Customer ID", "count"),
@@ -309,16 +331,30 @@ def segment_overview(data, recommendations, key):
     for segment, row in profile.iterrows():
         icon, color = seg_style(segment)
         share = row["Customers"] / total * 100
-        reco = html.escape(str(recommendations.get(segment, "No recommendation yet -- run main.py.")))
+        reco = str(recommendations.get(segment, "No recommendation yet -- run main.py."))
         with st.container(border=True, key=f"seg_{seg_slug(segment)}"):
-            c1, c2, c3, c4 = st.columns([1.6, 2.3, 2.7, 1.2], vertical_alignment="center", gap="medium")
+            c1, c2 = st.columns(2, vertical_alignment="top", gap="large")
             with c1:
                 st.html(
                     f"<div class='seg-head'><div class='seg-icon' style='background:{color}26'>{seg_icon_svg(segment)}</div>"
                     f"<div><div class='seg-name'>{html.escape(str(segment))}</div>"
-                    f"<div class='seg-count'>{int(row['Customers']):,} <small>customers</small></div>"
+                    f"<div class='seg-count'><span class='seg-count-icon'>{icon_svg('users', 19)}</span>"
+                    f"{int(row['Customers']):,}</div>"
                     f"</div></div>"
                 )
+                action_col, view_col = st.columns(2, gap="small")
+                with action_col:
+                    with st.expander("Recommended campaign"):
+                        st.write(reco)
+                with view_col:
+                    st.button(
+                        "View customers",
+                        icon=":material/groups:",
+                        width="stretch",
+                        key=f"view_segment_{seg_slug(segment)}",
+                        on_click=open_segment_customers,
+                        args=(str(segment),),
+                    )
             with c2:
                 st.html(
                     "<div class='stat-row'>"
@@ -326,19 +362,6 @@ def segment_overview(data, recommendations, key):
                     f"<div class='stat'><div class='stat-label'>Frequency</div><div class='stat-value'>{row['Frequency']:.1f} orders</div></div>"
                     f"<div class='stat'><div class='stat-label'>Monetary</div><div class='stat-value'>£{row['Monetary']:,.0f}</div></div>"
                     "</div>"
-                )
-            with c3:
-                st.html(f"<div class='reco-label'>Recommended campaign</div><div class='reco-text'>{reco}</div>")
-            with c4:
-                st.download_button(
-                    "Campaign list",
-                    csv_bytes(data[data["Segment"] == segment]),
-                    file_name=f"{seg_slug(segment)}_campaign_list.csv",
-                    mime="text/csv",
-                    key=f"{key}_download_{segment}",
-                    on_click="ignore",
-                    icon=":material/download:",
-                    width="stretch",
                 )
 
     st.divider()
@@ -492,14 +515,21 @@ def customer_table(data, key):
     """Customer table you can filter by segment and Customer ID, with a download button."""
     all_segments = sorted(data["Segment"].unique())
     col1, col2 = st.columns(2)
-    chosen = col1.multiselect("Segment", all_segments, default=all_segments, key=f"{key}_segments")
-    search = col2.text_input("Search Customer ID", key=f"{key}_search")
+    chosen = col1.multiselect(
+        "Segment", all_segments, default=[], placeholder="Select segments", key=f"{key}_segments_filter",
+    )
+    search = col2.text_input("Search Customer ID", key=f"{key}_search", icon=":material/search:")
 
-    filtered = data[data["Segment"].isin(chosen)]
+    filtered = data[data["Segment"].isin(chosen)] if chosen else data.iloc[0:0]
+    if search.strip() and not chosen:
+        filtered = data
     if search.strip():
         filtered = filtered[filtered["Customer ID"].astype(str).str.contains(search.strip(), regex=False)]
 
-    st.caption(f"Showing {len(filtered):,} of {len(data):,} customers. Click a column name to sort.")
+    if chosen or search.strip():
+        st.caption(f"Showing {len(filtered):,} of {len(data):,} customers. Click a column name to sort.")
+    else:
+        st.caption("Select one or more segments or search by customer ID to view customers.")
     st.dataframe(filtered, width="stretch", hide_index=True)
     st.download_button("Download this table (CSV)", csv_bytes(filtered), file_name="customers.csv",
                        mime="text/csv", key=f"{key}_download", on_click="ignore")
@@ -563,43 +593,65 @@ def assign_one_customer(customers, recommendations):
 
     with form_col:
         with st.container(border=True):
-            recency = st.number_input("Recency (days since last purchase)", min_value=0, value=30)
-            frequency = st.number_input("Frequency (number of orders)", min_value=1, value=5)
-            monetary = st.number_input("Monetary (total spent, GBP)", min_value=0.0, value=500.0)
-            if st.button("Assign segment", type="primary", width="stretch"):
-                segment = assign_new_customer(recency, frequency, monetary)
-                st.session_state["assigned"] = {"Customer ID": "New customer", "Recency": float(recency),
-                                                "Frequency": float(frequency), "Monetary": float(monetary),
-                                                "Segment": segment}
+            recency = st.number_input("Recency (days since last purchase)", min_value=0, value=None,
+                                      placeholder="30", key="new_customer_recency")
+            frequency = st.number_input("Frequency (number of orders)", min_value=1, value=None,
+                                        placeholder="5", key="new_customer_frequency")
+            monetary = st.number_input("Monetary (total spent, GBP)", min_value=0.0, value=None,
+                                       placeholder="500.00", key="new_customer_monetary")
+            can_assign = all(value is not None for value in (recency, frequency, monetary))
+            if st.button("Assign segment", type="primary", width="stretch",
+                         disabled=not can_assign or st.session_state.get("assigning_segment", False)):
+                st.session_state["assigning_segment"] = True
+                try:
+                    with st.spinner("Assigning segment..."):
+                        segment = assign_new_customer(recency, frequency, monetary)
+                    st.session_state["assigned"] = {"Customer ID": "New customer", "Recency": float(recency),
+                                                    "Frequency": float(frequency), "Monetary": float(monetary),
+                                                    "Segment": segment}
+                finally:
+                    st.session_state["assigning_segment"] = False
 
     with result_col:
-        assigned = st.session_state.get("assigned")
-        if not assigned:
-            st.info("Fill in the form and click **Assign segment**. The result and a chart will show up here.")
-            return
-        segment = assigned["Segment"]
-        reco = html.escape(str(recommendations.get(segment, "No recommendation yet.")))
-        st.html(
-            f"<div class='result'><div class='result-icon' style='background:#FFFFFF'>{seg_icon_svg(segment)}</div>"
-            f"<div><div class='result-label'>Assigned segment</div>"
-            f"<div class='result-name'>{html.escape(str(segment))}</div></div></div>"
-            f"<div class='result-reco'><b>Recommended action:</b> {reco}</div>"
-        )
-        st.altair_chart(scatter_highlight(customers, pd.DataFrame([assigned]), height=300), width="stretch")
-        st.caption("The big marker is the new customer. The faint dots are your existing customers, "
-                   "so you can see which group they land in.")
+        with st.container(border=True):
+            assigned = st.session_state.get("assigned")
+            if not assigned:
+                st.caption("After filling the form, the chart will show up here.")
+            else:
+                segment = assigned["Segment"]
+                reco = html.escape(str(recommendations.get(segment, "No recommendation yet.")))
+                st.html(
+                    f"<div class='result'><div class='result-icon' style='background:#FFFFFF'>{seg_icon_svg(segment)}</div>"
+                    f"<div><div class='result-label'>Assigned segment</div>"
+                    f"<div class='result-name'>{html.escape(str(segment))}</div></div></div>"
+                    f"<div class='result-reco'><b>Recommended action:</b> {reco}</div>"
+                )
+                st.altair_chart(scatter_highlight(customers, pd.DataFrame([assigned]), height=300), width="stretch")
+                st.caption("The big marker is the new customer. The faint dots are your existing customers, "
+                           "so you can see which group they land in.")
+
+
+@st.dialog("Reset to original data?", icon=":material/restore:")
+def confirm_reset_dialog():
+    st.write("All uploaded transactions will be removed. This cannot be undone.")
+    confirm_col, cancel_col = st.columns(2)
+    if confirm_col.button("Reset data", type="primary", width="stretch"):
+        with st.spinner("Restoring original data..."):
+            reset_to_original()
+        st.session_state["uploader_version"] += 1
+        st.session_state["processed_file"] = None
+        st.session_state["upload_preview_id"] = None
+        st.session_state["upload_preview"] = None
+        st.session_state["upload_preview_error"] = None
+        st.session_state["last_update"] = None
+        st.rerun()
+    if cancel_col.button("Cancel", width="stretch"):
+        st.rerun()
 
 
 def upload_section(customers):
     st.subheader("Add new transactions (upload a file)")
-    st.write(
-        "Upload a transactions file (.csv or .xlsx) with the same columns as the Online Retail II data: "
-        "Invoice, Quantity, InvoiceDate, Price, Customer ID (StockCode and Description are optional, "
-        "but needed if you want these purchases to affect the recommendations). The file can contain "
-        "new customers only, or new purchases of existing customers. The system cleans it, updates every "
-        "customer's RFM, assigns segments automatically, and **updates the Dashboard and Customer Table "
-        "tabs**. An invoice line that is already in the system is not counted twice."
-    )
+    st.write("Upload a CSV or Excel transactions file. Review the cleaned preview, then confirm to add it.")
     st.download_button("Download sample file", SAMPLE_FILE, file_name="sample_transactions.csv",
                        mime="text/csv", on_click="ignore")
 
@@ -609,16 +661,45 @@ def upload_section(customers):
     if uploaded is not None:
         file_bytes = uploaded.getvalue()
         file_id = hashlib.md5(file_bytes).hexdigest()
-        if st.session_state.get("processed_file") != file_id:          # only add a file once
+        if st.session_state.get("upload_preview_id") != file_id:
+            st.session_state["upload_preview_id"] = file_id
+            st.session_state["upload_preview"] = None
+            st.session_state["upload_preview_error"] = None
             st.session_state["last_update"] = None
             try:
-                with st.spinner("Cleaning the data and updating the dashboard..."):
-                    st.session_state["last_update"] = upload_and_add(file_bytes, uploaded.name)
-                st.session_state["processed_file"] = file_id
+                with st.spinner("Cleaning the uploaded data..."):
+                    cleaned, cleaning_log = prepare_upload_preview(file_bytes, uploaded.name)
+                st.session_state["upload_preview"] = {"cleaned": cleaned, "cleaning_log": cleaning_log}
             except Exception as error:
-                st.error(f"Could not process the file: {error}")
-            else:
-                st.rerun()                                             # refresh the other tabs
+                st.session_state["upload_preview_error"] = str(error)
+
+        if st.session_state.get("upload_preview_error"):
+            st.error(f"Could not read the file: {st.session_state['upload_preview_error']}")
+        preview = st.session_state.get("upload_preview")
+        if preview:
+            cleaned = preview["cleaned"]
+            st.caption(f"Cleaned preview: first 5 of {len(cleaned):,} valid rows. Nothing is saved yet.")
+            st.dataframe(cleaned.head(5), hide_index=True, width="stretch")
+            already_added = st.session_state.get("processed_file") == file_id
+            if already_added:
+                st.success("Transactions added. The Dashboard and Customer Table are updated.")
+            if st.button("Confirm and add transactions", type="primary", icon=":material/save:",
+                         disabled=already_added or st.session_state.get("upload_saving", False),
+                         key=f"confirm_upload_{version}"):
+                st.session_state["upload_saving"] = True
+                st.session_state["processed_file"] = file_id
+                try:
+                    with st.spinner("Saving transactions and updating customer segments..."):
+                        st.session_state["last_update"] = upload_and_add(
+                            cleaned, preview["cleaning_log"],
+                        )
+                except Exception as error:
+                    st.session_state["processed_file"] = None
+                    st.error(f"Could not save the file: {error}")
+                else:
+                    st.rerun()
+                finally:
+                    st.session_state["upload_saving"] = False
 
     update = st.session_state.get("last_update")
     if update:
@@ -664,14 +745,8 @@ def upload_section(customers):
         st.subheader("Customers in this file")
         customer_table(update["affected"], key="upload_table")
 
-    with st.expander("Undo uploads"):
-        st.write("Go back to the original data created by main.py. All uploaded transactions are removed.")
-        if st.button("Reset to original data"):
-            reset_to_original()
-            st.session_state["uploader_version"] += 1                  # clears the file box
-            st.session_state["processed_file"] = None
-            st.session_state["last_update"] = None
-            st.rerun()
+    if st.button("Reset to original data", icon=":material/restore:"):
+        confirm_reset_dialog()
 
 
 # ---------- Page ----------
@@ -697,13 +772,15 @@ st.html(
     "<div class='cc-kicker'>Customer Segmentation and Targeted Marketing Recommendation System</div>"
 )
 
-tab_dashboard, tab_new, tab_table = st.tabs(["Dashboard", "New Customers", "Customer Table"])
+tab_dashboard, tab_new, tab_table = st.tabs(
+    ["Dashboard", "New Customers", "Customer Table"], key="main_tabs", on_change="rerun",
+)
 
 # ----- Tab 1: overview of the existing customers -----
 with tab_dashboard:
     totals_row(customers)
     st.divider()
-    segment_overview(customers, recommendations, key="main")
+    segment_overview(customers, recommendations)
     recommendation_evidence(key="main")
 
 # ----- Tab 2: new customers (one at a time, or upload a file that updates the dashboard) -----
