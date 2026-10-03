@@ -15,6 +15,7 @@ from sqlalchemy.exc import OperationalError
 import db
 from classification import assign_new_customer
 from cleaning import clean_data, prepare_uploaded_data, read_uploaded_file
+from config import OUTPUT_DIR
 from data_store import add_transactions, reset_to_original
 
 st.set_page_config(page_title="ClusterCart", page_icon="🛒", layout="wide")
@@ -277,6 +278,36 @@ def totals_row(data):
         (icon_svg("cart"), "Avg orders / customer", f"{data['Frequency'].mean():.1f}"),
         (icon_svg("card"), "Avg spend / customer", f"£{data['Monetary'].mean():,.0f}"),
     ])
+
+
+def classifier_comparison():
+    """Show held-out classification metrics and explain which model was selected."""
+    results_file = OUTPUT_DIR / "classification_results.csv"
+    if not results_file.exists():
+        st.info("Classifier results are not available yet. Run main.py to train and compare the models.")
+        return
+
+    comparison = pd.read_csv(results_file)
+    metric_columns = ["Accuracy", "Precision", "Recall", "F1-score"]
+    required_columns = ["Model", *metric_columns]
+    if any(column not in comparison.columns for column in required_columns) or comparison.empty:
+        st.warning("Classifier results could not be read. Run main.py again to regenerate them.")
+        return
+
+    comparison = comparison[required_columns].round(4)
+    best_model = comparison.loc[comparison["F1-score"].idxmax(), "Model"]
+    highlighted = comparison.style.apply(
+        lambda row: [
+            "background-color: #FFF1EF; font-weight: 700" if row["Model"] == best_model else ""
+            for _ in row
+        ],
+        axis=1,
+    )
+
+    st.subheader("Model Performance")
+    st.markdown("**Classifier Comparison**")
+    st.caption("Metrics are measured on the test set; Precision, Recall, and F1-score use weighted averaging.")
+    st.dataframe(highlighted, hide_index=True, width="stretch")
 
 
 def scatter_axis(title=None):
@@ -782,6 +813,8 @@ with tab_dashboard:
     st.divider()
     segment_overview(customers, recommendations)
     recommendation_evidence(key="main")
+    st.divider()
+    classifier_comparison()
 
 # ----- Tab 2: new customers (one at a time, or upload a file that updates the dashboard) -----
 with tab_new:
